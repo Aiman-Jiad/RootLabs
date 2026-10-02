@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   BookOpen,
   Check,
@@ -7,39 +7,36 @@ import {
   Clock3,
   GraduationCap,
 } from "lucide-react";
-import { roadmapItems } from "@/data/roadmap";
+
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { loadRoadmap } from "@/lib/roadmapLoader";
 import { useProgressStore } from "@/store/progress";
 import { cn } from "@/lib/utils";
 import type { RoadmapItem } from "@/types/roadmap";
 
 interface RoadmapNodeProps {
   item: RoadmapItem;
+  items: RoadmapItem[];
   level: number;
 }
 
-function getChildren(parentId: string): RoadmapItem[] {
-  return roadmapItems
+function getChildren(
+  items: RoadmapItem[],
+  parentId: string,
+): RoadmapItem[] {
+  return items
     .filter((item) => item.parentId === parentId)
     .sort((a, b) => a.order - b.order);
 }
 
-function getDescendantTopics(itemId: string): RoadmapItem[] {
-  const children = getChildren(itemId);
-
-  return children.flatMap((child) => {
-    if (child.type === "topic" || child.type === "subtopic") {
-      return [child, ...getDescendantTopics(child.id)];
-    }
-
-    return getDescendantTopics(child.id);
-  });
-}
-
-function RoadmapNode({ item, level }: RoadmapNodeProps) {
-  const children = getChildren(item.id);
+function RoadmapNode({
+  item,
+  items,
+  level,
+}: RoadmapNodeProps) {
+  const children = getChildren(items, item.id);
   const hasChildren = children.length > 0;
 
   const [expanded, setExpanded] = useState(level < 2);
@@ -47,16 +44,16 @@ function RoadmapNode({ item, level }: RoadmapNodeProps) {
   const completedItems = useProgressStore(
     (state) => state.completedItems,
   );
-  const toggleItem = useProgressStore((state) => state.toggleItem);
+  const toggleItem = useProgressStore(
+    (state) => state.toggleItem,
+  );
 
   const isCompleted = completedItems.includes(item.id);
 
   const Icon =
     item.type === "semester"
       ? GraduationCap
-      : item.type === "subject"
-        ? BookOpen
-        : BookOpen;
+      : BookOpen;
 
   const isTrackable =
     item.type === "topic" || item.type === "subtopic";
@@ -69,15 +66,21 @@ function RoadmapNode({ item, level }: RoadmapNodeProps) {
           hasChildren && "hover:bg-accent",
           isCompleted && "opacity-60",
         )}
-        style={{ paddingLeft: `${level * 24 + 12}px` }}
+        style={{
+          paddingLeft: `${level * 24 + 12}px`,
+        }}
       >
         <button
           type="button"
-          onClick={() => hasChildren && setExpanded(!expanded)}
+          onClick={() =>
+            hasChildren && setExpanded((value) => !value)
+          }
           disabled={!hasChildren}
           className="flex h-5 w-5 shrink-0 items-center justify-center"
           aria-label={
-            expanded ? `Collapse ${item.title}` : `Expand ${item.title}`
+            expanded
+              ? `Collapse ${item.title}`
+              : `Expand ${item.title}`
           }
         >
           {hasChildren &&
@@ -104,7 +107,9 @@ function RoadmapNode({ item, level }: RoadmapNodeProps) {
                 : `Mark ${item.title} as complete`
             }
           >
-            {isCompleted && <Check className="h-3.5 w-3.5" />}
+            {isCompleted && (
+              <Check className="h-3.5 w-3.5" />
+            )}
           </button>
         ) : (
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary">
@@ -130,7 +135,10 @@ function RoadmapNode({ item, level }: RoadmapNodeProps) {
         </div>
 
         {item.difficulty && (
-          <Badge variant="outline" className="hidden sm:inline-flex">
+          <Badge
+            variant="outline"
+            className="hidden sm:inline-flex"
+          >
             {item.difficulty}
           </Badge>
         )}
@@ -149,6 +157,7 @@ function RoadmapNode({ item, level }: RoadmapNodeProps) {
             <RoadmapNode
               key={child.id}
               item={child}
+              items={items}
               level={level + 1}
             />
           ))}
@@ -159,16 +168,56 @@ function RoadmapNode({ item, level }: RoadmapNodeProps) {
 }
 
 export function RoadmapTree() {
-  const rootItems = roadmapItems
-    .filter((item) => item.parentId === null)
-    .sort((a, b) => a.order - b.order);
-
-  const trackableItems = roadmapItems.filter(
-    (item) => item.type === "topic" || item.type === "subtopic",
-  );
+  const [items, setItems] = useState<RoadmapItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const completedItems = useProgressStore(
     (state) => state.completedItems,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchRoadmap() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const data = await loadRoadmap();
+
+        if (!cancelled) {
+          setItems(data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load roadmap.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    fetchRoadmap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const rootItems = items
+    .filter((item) => item.parentId === null)
+    .sort((a, b) => a.order - b.order);
+
+  const trackableItems = items.filter(
+    (item) =>
+      item.type === "topic" || item.type === "subtopic",
   );
 
   const completedCount = trackableItems.filter((item) =>
@@ -178,7 +227,36 @@ export function RoadmapTree() {
   const progress =
     trackableItems.length === 0
       ? 0
-      : Math.round((completedCount / trackableItems.length) * 100);
+      : Math.round(
+          (completedCount / trackableItems.length) * 100,
+        );
+
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <p className="text-sm text-muted-foreground">
+            Loading your roadmap...
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <p className="text-sm font-medium">
+            Could not load the roadmap
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {error}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -209,6 +287,7 @@ export function RoadmapTree() {
             <RoadmapNode
               key={item.id}
               item={item}
+              items={items}
               level={0}
             />
           ))}
